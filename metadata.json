@@ -1,0 +1,5 @@
+
+{
+  "name": "Formula Forge",
+  "description": "An application that solves mathematics, science, and logical reasoning problems by allowing users to type, upload an image, or draw the problem. It uses Gemini API to provide detailed, step-by-step solutions."
+}
