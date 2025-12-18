@@ -107,7 +107,7 @@ function RenderTree({ node }) {
 
   if (["number", "string", "identifier", "boolean", "range"].includes(node.type)) {
     return (
-      <span className="px-2 py-0.5 rounded border text-sm bg-gray-100 dark:bg-gray-800">
+      <span className="px-2 py-0.5 rounded border text-sm bg-gray-100 dark:bg-gray-800" style={{backgroundColor:'#1F2937'}}>
         {node.type === "string" ? `"${node.value}"` : node.value}
       </span>
     );
@@ -119,7 +119,7 @@ function RenderTree({ node }) {
 
   if (node.type === "sequence") {
     return (
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap gap-1" >
         {node.children.map((c, i) => <RenderTree key={i} node={c} />)}
       </div>
     );
