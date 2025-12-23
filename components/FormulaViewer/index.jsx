@@ -13,6 +13,21 @@ function isWhitespace(ch) {
   return ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
 }
 
+const COMPARISON_OPERATORS = [">", "<", ">=", "<=", "==", "!="];
+const IDENTIFIER_REGEX = /\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b/g;
+
+
+/* ===========================
+   Operator Helpers
+=========================== */
+
+const OPERATORS = ["&&", "||", ">=", "<=", "==", "!=", "+", "-", "*", "/", ">", "<", "=", "^", "?", "%"];
+
+function matchOperator(str, index) {
+  return OPERATORS.find(op => str.startsWith(op, index));
+}
+
+
 /* ===========================
    Formula Parser
 =========================== */
@@ -27,6 +42,15 @@ function parseFormula(str) {
   function skipWhitespace() { while (!eof() && isWhitespace(peek())) i++; }
 
   function parsePrimary() {
+    if (peek() === "!") {
+      next();
+      return {
+        type: "unary",
+        operator: "!",
+        argument: parsePrimary(),
+      };
+    }
+
     skipWhitespace();
     if (eof()) return null;
     const ch = peek();
@@ -84,19 +108,28 @@ function parseFormula(str) {
     while (!eof()) {
       skipWhitespace();
       if (peek() === ")" || peek() === ",") break;
+
       const prim = parsePrimary();
       if (prim) nodes.push(prim);
+
       skipWhitespace();
-      if (!eof() && "+-*/=<>".includes(peek())) nodes.push({ type: "operator", value: next() });
+      const op = matchOperator(str, i);
+      if (op) {
+        i += op.length;
+        nodes.push({ type: "operator", value: op });
+      }
     }
     if (nodes.length === 1) return nodes[0];
     return { type: "sequence", children: nodes };
   }
 
+
   skipWhitespace();
   if (peek() === "=") next();
   return parseExpression();
 }
+
+
 
 /* ===========================
    RenderTree Component
@@ -107,7 +140,7 @@ function RenderTree({ node }) {
 
   if (["number", "string", "identifier", "boolean", "range"].includes(node.type)) {
     return (
-      <span className="px-2 py-0.5 rounded border text-sm bg-gray-100 dark:bg-gray-800" style={{backgroundColor:'#1F2937'}}>
+      <span className="px-2 py-0.5 rounded border text-sm bg-gray-100 dark:bg-gray-800" style={{ backgroundColor: '#1F2937' }}>
         {node.type === "string" ? `"${node.value}"` : node.value}
       </span>
     );
@@ -117,9 +150,18 @@ function RenderTree({ node }) {
     return <span className="mx-1 font-bold text-black">{node.value}</span>;
   }
 
+  if (node.type === "unary") {
+    return (
+      <span className="flex items-center gap-1">
+        <span className="font-bold">!</span>
+        <RenderTree node={node.argument} />
+      </span>
+    );
+  }
+
   if (node.type === "sequence") {
     return (
-      <div className="flex flex-wrap gap-1" >
+      <div className="flex flex-wrap gap-1">
         {node.children.map((c, i) => <RenderTree key={i} node={c} />)}
       </div>
     );
@@ -173,6 +215,27 @@ export default function FormulaViewer() {
     { name: "endDate", description: "Date - Policy End Date" },
   ];
 
+  const objects = {
+    policy: [
+      { name: "pt", description: "Number - Policy Threshold", dataType: 'number' },
+      { name: "name", description: "Text - Policy Holder Name", dataType: 'string' },
+      { name: "startDate", description: "Date - Policy Start Date", dataType: 'date' },
+      { name: "endDate", description: "Date - Policy End Date", dataType: 'date' },
+      { name: "product", description: "Date - Policy End Date", dataType: 'string' },
+      { name: "UIN", description: "Date - Policy End Date", dataType: 'string' },
+    ],
+    premium: [
+      { name: "amount", description: "Number - Premium Amount", dataType: 'string' },
+      { name: "frequency", description: "Text - Payment Frequency", dataType: 'number' },
+    ],
+    customer: [
+      { name: "firstName", description: "Text - Customer First Name", dataType: 'string' },
+      { name: "lastName", description: "Text - Customer Last Name", dataType: 'string' },
+      { name: "dob", description: "Date - Date of Birth", dataType: 'date' },
+    ],
+  };
+
+
   const { ast } = useMemo(() => ({ ast: parseFormula(formula) }), [formula]);
 
   const filteredFields = fields.filter(f =>
@@ -201,9 +264,98 @@ export default function FormulaViewer() {
     editor.focus();
   };
 
+  function indexToPosition(model, index) {
+    const textBefore = model.getValue().slice(0, index);
+    const lines = textBefore.split("\n");
+
+    return {
+      lineNumber: lines.length,
+      column: lines[lines.length - 1].length + 1,
+    };
+  }
+
+
+  function inferLiteralType(value) {
+    if (/^".*"$/.test(value)) return "string";
+    if (/^\d+(\.\d+)?$/.test(value)) return "number";
+    return null;
+  }
+
+  function validateFormulaIdentifiers(formula, objects) {
+    const errors = [];
+
+    // object.property
+    const IDENTIFIER_REGEX = /\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b/g;
+
+    // object.property OP literal
+    const COMPARISON_REGEX =
+      /\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|>=|<=|>|<)\s*(".*?"|\d+(\.\d+)?)/g;
+
+    let match;
+
+    /* ---------------------------
+       1️⃣ Object / Property check
+    --------------------------- */
+    while ((match = IDENTIFIER_REGEX.exec(formula)) !== null) {
+      const [full, objectName, propertyName] = match;
+      const startIndex = match.index;
+
+      if (!objects[objectName]) {
+        errors.push({
+          message: `Unknown object '${objectName}'`,
+          start: startIndex,
+          end: startIndex + objectName.length,
+        });
+        continue;
+      }
+
+      const field = objects[objectName].find(f => f.name === propertyName);
+      if (!field) {
+        errors.push({
+          message: `Property '${propertyName}' does not exist on '${objectName}'`,
+          start: startIndex + objectName.length + 1,
+          end: startIndex + full.length,
+        });
+      }
+    }
+
+    /* ---------------------------
+       2️⃣ Type mismatch check
+    --------------------------- */
+    while ((match = COMPARISON_REGEX.exec(formula)) !== null) {
+      const [full, objectName, propertyName, operator, literal] = match;
+      const startIndex = match.index;
+
+      if (!objects[objectName]) continue;
+
+      const field = objects[objectName].find(f => f.name === propertyName);
+      if (!field || !field.dataType) continue;
+
+      const literalType = inferLiteralType(literal);
+      if (!literalType) continue;
+
+      // ❌ Type mismatch
+      if (field.dataType !== literalType) {
+        errors.push({
+          message: `Cannot compare ${field.dataType} with ${literalType}`,
+          start: startIndex,
+          end: startIndex + full.length,
+        });
+      }
+    }
+
+    return errors;
+  }
+
+
+
   const handleEditorDidMount = (editor, monaco) => {
     editorRef.current = editor;
+    const model = editor.getModel();
 
+    /* ===============================
+       EXISTING AUTOCOMPLETE (UNCHANGED)
+    =============================== */
     monaco.languages.registerCompletionItemProvider("plaintext", {
       provideCompletionItems: (model, position) => {
         const textUntilPosition = model.getValueInRange({
@@ -215,17 +367,21 @@ export default function FormulaViewer() {
 
         let suggestions = [];
 
-        const policyMatch = textUntilPosition.match(/policy\.([A-Za-z0-9_]*)$/);
-        if (policyMatch) {
-          const typedAfterDot = policyMatch[1];
-          suggestions = fields
-            .filter(f => f.name.startsWith(typedAfterDot))
-            .map(f => ({
-              label: f.name,
-              kind: monaco.languages.CompletionItemKind.Field,
-              insertText: f.name,
-              detail: f.description,
-            }));
+        const match = textUntilPosition.match(/([A-Za-z0-9_]+)\.([A-Za-z0-9_]*)$/);
+        if (match) {
+          const objectName = match[1];
+          const typedField = match[2];
+
+          if (objects[objectName]) {
+            suggestions = objects[objectName]
+              .filter(f => f.name.startsWith(typedField))
+              .map(f => ({
+                label: f.name,
+                kind: monaco.languages.CompletionItemKind.Field,
+                insertText: f.name,
+                detail: f.description,
+              }));
+          }
         } else {
           const genericMatch = textUntilPosition.match(/([A-Za-z0-9_]*)$/);
           const prefix = genericMatch ? genericMatch[1] : "";
@@ -243,6 +399,37 @@ export default function FormulaViewer() {
         return { suggestions };
       }
     });
+
+    /* ===============================
+       ADD VALIDATION (NEW)
+    =============================== */
+
+    const runValidation = () => {
+      const value = model.getValue();
+      const errors = validateFormulaIdentifiers(value, objects);
+
+      const markers = errors.map(err => {
+        const start = indexToPosition(model, err.start);
+        const end = indexToPosition(model, err.end);
+
+        return {
+          severity: monaco.MarkerSeverity.Error,
+          message: err.message,
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: end.lineNumber,
+          endColumn: end.column,
+        };
+      });
+
+      monaco.editor.setModelMarkers(model, "formula-validation", markers);
+    };
+
+    // Re-validate on every change
+    editor.onDidChangeModelContent(runValidation);
+
+    // Initial validation
+    runValidation();
   };
 
   return (
@@ -268,7 +455,7 @@ export default function FormulaViewer() {
             options={{
               fontFamily: "monospace",
               fontSize: 14,
-              minimap: { enabled: false },
+              minimap: { enabled: true },
               scrollBeyondLastLine: false,
             }}
           />
